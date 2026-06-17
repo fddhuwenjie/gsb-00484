@@ -1,6 +1,8 @@
 import { Router, type Request, type Response } from 'express'
 import db from '../database.js'
 
+const ALERT_COOLDOWN_MINUTES = 5
+
 const router = Router()
 
 router.get('/', (req: Request, res: Response): void => {
@@ -63,6 +65,26 @@ router.delete('/:id', (req: Request, res: Response): void => {
 export function runAnomalyDetection(): void {
   const now = new Date().toISOString()
 
+  const insertAlertStmt = db.prepare(`
+    INSERT INTO spot_alerts (spot_id, alert_type, triggered_at, status)
+    SELECT ?, ?, ?, 'pending'
+    WHERE NOT EXISTS (
+      SELECT 1 FROM spot_alerts
+      WHERE spot_id = ?
+        AND alert_type = ?
+        AND (
+          status = 'pending'
+          OR (status = 'handled' AND datetime(handled_at) >= datetime('now', ?))
+        )
+    )
+  `)
+
+  function tryCreateAlert(spotId: number, alertType: string): void {
+    const cooldown = `-${ALERT_COOLDOWN_MINUTES} minutes`
+    const result = insertAlertStmt.run(spotId, alertType, now, spotId, alertType, cooldown)
+    result.changes
+  }
+
   const overtimeVehicles = db.prepare(`
     SELECT vr.spot_id
     FROM vehicle_record vr
@@ -71,18 +93,8 @@ export function runAnomalyDetection(): void {
       AND datetime(vr.entry_time) <= datetime('now', '-48 hours')
   `).all() as Array<{ spot_id: number }>
 
-  const insertAlert = db.prepare(
-    'INSERT INTO spot_alerts (spot_id, alert_type, triggered_at, status) VALUES (?, ?, ?, ?)'
-  )
-  const pendingCheck = db.prepare(
-    "SELECT id FROM spot_alerts WHERE spot_id = ? AND alert_type = ? AND status = 'pending'"
-  )
-
   for (const v of overtimeVehicles) {
-    const existing = pendingCheck.get(v.spot_id, 'overtime')
-    if (!existing) {
-      insertAlert.run(v.spot_id, 'overtime', now, 'pending')
-    }
+    tryCreateAlert(v.spot_id, 'overtime')
   }
 
   const sensorFaultSpots = db.prepare(`
@@ -96,10 +108,7 @@ export function runAnomalyDetection(): void {
   `).all() as Array<{ spot_id: number }>
 
   for (const s of sensorFaultSpots) {
-    const existing = pendingCheck.get(s.spot_id, 'sensor_fault')
-    if (!existing) {
-      insertAlert.run(s.spot_id, 'sensor_fault', now, 'pending')
-    }
+    tryCreateAlert(s.spot_id, 'sensor_fault')
   }
 
   const vipViolations = db.prepare(`
@@ -118,10 +127,7 @@ export function runAnomalyDetection(): void {
   `).all(now) as Array<{ spot_id: number }>
 
   for (const v of vipViolations) {
-    const existing = pendingCheck.get(v.spot_id, 'vip_violation')
-    if (!existing) {
-      insertAlert.run(v.spot_id, 'vip_violation', now, 'pending')
-    }
+    tryCreateAlert(v.spot_id, 'vip_violation')
   }
 }
 

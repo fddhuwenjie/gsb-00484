@@ -276,6 +276,15 @@ export default function AlertCenter() {
     fetchPendingAlertsCount()
   }, [activeTab])
 
+  useEffect(() => {
+    if (detailAlert && alerts?.length > 0) {
+      const updated = alerts.find((a: any) => a.id === detailAlert.id)
+      if (updated && updated.status !== detailAlert.status) {
+        setDetailAlert(updated)
+      }
+    }
+  }, [alerts, detailAlert?.id])
+
   const sortedAlerts = [...(alerts || [])].sort((a: any, b: any) => {
     const priorityA = ALERT_TYPE_CONFIG[a.alert_type as AlertType]?.priority ?? 99
     const priorityB = ALERT_TYPE_CONFIG[b.alert_type as AlertType]?.priority ?? 99
