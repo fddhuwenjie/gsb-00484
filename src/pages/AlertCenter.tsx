@@ -287,7 +287,8 @@ export default function AlertCenter() {
 
   const handleConfirm = (remark: string) => {
     if (handleAlertId) {
-      handleAlert(handleAlertId, { handler: '管理员', remark })
+      const status = activeTab === 'all' ? undefined : activeTab
+      handleAlert(handleAlertId, { handler: '管理员', remark }, status ? { status } : undefined)
       setHandleAlertId(null)
     }
   }
