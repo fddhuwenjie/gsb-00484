@@ -74,8 +74,8 @@ interface AppState {
   visitorEntry: (data: any) => Promise<any>
   fetchAlerts: (params?: Record<string, any>) => Promise<void>
   fetchPendingAlertsCount: () => Promise<void>
-  handleAlert: (id: number, data: any) => Promise<void>
-  deleteAlert: (id: number) => Promise<void>
+  handleAlert: (id: number, data: any, refreshParams?: Record<string, any>) => Promise<void>
+  deleteAlert: (id: number, refreshParams?: Record<string, any>) => Promise<void>
   fetchDailyReport: (params?: Record<string, any>) => Promise<void>
   exportDailyReport: (params?: Record<string, any>) => Promise<Blob>
   fetchPlateRecords: (params?: Record<string, any>) => Promise<void>
@@ -443,15 +443,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ pendingAlertsCount: typeof data === 'number' ? data : (data as any)?.count ?? 0 })
   },
 
-  handleAlert: async (id, data) => {
+  handleAlert: async (id, data, refreshParams) => {
     await api.alerts.handle(id, data)
-    await get().fetchAlerts()
+    await get().fetchAlerts(refreshParams)
     await get().fetchPendingAlertsCount()
   },
 
-  deleteAlert: async (id) => {
+  deleteAlert: async (id, refreshParams) => {
     await api.alerts.remove(id)
-    await get().fetchAlerts()
+    await get().fetchAlerts(refreshParams)
     await get().fetchPendingAlertsCount()
   },
 
