@@ -267,8 +267,8 @@ function DetailModal({ alert, onClose }: { alert: any; onClose: () => void }) {
 export default function AlertCenter() {
   const { alerts, pendingAlertsCount, loading, fetchAlerts, fetchPendingAlertsCount, handleAlert, deleteAlert } = useAppStore()
   const [activeTab, setActiveTab] = useState<TabType>('pending')
-  const [handleAlertId, setHandleAlertId] = useState<any>(null)
-  const [detailAlert, setDetailAlert] = useState<any>(null)
+  const [handleAlertId, setHandleAlertId] = useState<number | null>(null)
+  const [detailAlertId, setDetailAlertId] = useState<number | null>(null)
 
   useEffect(() => {
     const status = activeTab === 'all' ? undefined : activeTab
@@ -284,10 +284,12 @@ export default function AlertCenter() {
   })
 
   const currentAlert = handleAlertId ? alerts.find((a: any) => a.id === handleAlertId) : null
+  const detailAlert = detailAlertId ? alerts.find((a: any) => a.id === detailAlertId) : null
 
   const handleConfirm = (remark: string) => {
     if (handleAlertId) {
-      handleAlert(handleAlertId, { handler: '管理员', remark })
+      const status = activeTab === 'all' ? undefined : activeTab
+      handleAlert(handleAlertId, { handler: '管理员', remark }, status ? { status } : undefined)
       setHandleAlertId(null)
     }
   }
@@ -426,7 +428,7 @@ export default function AlertCenter() {
                         处理
                       </button>
                       <button
-                        onClick={() => setDetailAlert(alert)}
+                        onClick={() => setDetailAlertId(alert.id)}
                         className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium bg-[#2a2d3e]/50 text-slate-300 border border-[#2a2d3e] hover:bg-[#2a2d3e] hover:text-slate-200 transition-colors"
                       >
                         <Eye size={15} />
@@ -436,7 +438,7 @@ export default function AlertCenter() {
                   )}
                   {isHandled && (
                     <button
-                      onClick={() => setDetailAlert(alert)}
+                      onClick={() => setDetailAlertId(alert.id)}
                       className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium bg-[#2a2d3e]/50 text-slate-300 border border-[#2a2d3e] hover:bg-[#2a2d3e] hover:text-slate-200 transition-colors"
                     >
                       <Eye size={15} />
@@ -461,7 +463,7 @@ export default function AlertCenter() {
       {detailAlert && (
         <DetailModal
           alert={detailAlert}
-          onClose={() => setDetailAlert(null)}
+          onClose={() => setDetailAlertId(null)}
         />
       )}
     </div>

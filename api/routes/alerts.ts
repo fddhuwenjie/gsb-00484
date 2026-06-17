@@ -8,8 +8,8 @@ router.get('/', (req: Request, res: Response): void => {
   const orderBy = `ORDER BY
     CASE sa.alert_type
       WHEN 'overtime' THEN 1
-      WHEN 'sensor_fault' THEN 2
-      WHEN 'vip_violation' THEN 3
+      WHEN 'vip_violation' THEN 2
+      WHEN 'sensor_fault' THEN 3
       ELSE 4
     END,
     sa.triggered_at DESC`
@@ -60,8 +60,23 @@ router.delete('/:id', (req: Request, res: Response): void => {
   res.json({ success: true, data: null })
 })
 
+const COOLDOWN_MINUTES = 5
+
 export function runAnomalyDetection(): void {
   const now = new Date().toISOString()
+
+  const insertAlert = db.prepare(
+    'INSERT INTO spot_alerts (spot_id, alert_type, triggered_at, status) VALUES (?, ?, ?, ?)'
+  )
+  const pendingCheck = db.prepare(
+    "SELECT id FROM spot_alerts WHERE spot_id = ? AND alert_type = ? AND status = 'pending'"
+  )
+  const recentHandledCheck = db.prepare(
+    "SELECT id FROM spot_alerts WHERE spot_id = ? AND alert_type = ? AND status = 'handled' AND datetime(handled_at) >= datetime('now', ?)"
+  )
+  const resolveAlert = db.prepare(
+    "UPDATE spot_alerts SET status = 'handled', handler = 'system', handled_at = ?, remark = '异常条件自动恢复' WHERE spot_id = ? AND alert_type = ? AND status = 'pending'"
+  )
 
   const overtimeVehicles = db.prepare(`
     SELECT vr.spot_id
@@ -71,18 +86,24 @@ export function runAnomalyDetection(): void {
       AND datetime(vr.entry_time) <= datetime('now', '-48 hours')
   `).all() as Array<{ spot_id: number }>
 
-  const insertAlert = db.prepare(
-    'INSERT INTO spot_alerts (spot_id, alert_type, triggered_at, status) VALUES (?, ?, ?, ?)'
-  )
-  const pendingCheck = db.prepare(
-    "SELECT id FROM spot_alerts WHERE spot_id = ? AND alert_type = ? AND status = 'pending'"
-  )
+  const overtimeSpotIds = new Set(overtimeVehicles.map(v => v.spot_id))
+
+  const pendingOvertime = db.prepare(
+    "SELECT spot_id FROM spot_alerts WHERE alert_type = 'overtime' AND status = 'pending'"
+  ).all() as Array<{ spot_id: number }>
+
+  for (const a of pendingOvertime) {
+    if (!overtimeSpotIds.has(a.spot_id)) {
+      resolveAlert.run(now, a.spot_id, 'overtime')
+    }
+  }
 
   for (const v of overtimeVehicles) {
     const existing = pendingCheck.get(v.spot_id, 'overtime')
-    if (!existing) {
-      insertAlert.run(v.spot_id, 'overtime', now, 'pending')
-    }
+    if (existing) continue
+    const recent = recentHandledCheck.get(v.spot_id, 'overtime', `-${COOLDOWN_MINUTES} minutes`)
+    if (recent) continue
+    insertAlert.run(v.spot_id, 'overtime', now, 'pending')
   }
 
   const sensorFaultSpots = db.prepare(`
@@ -95,11 +116,24 @@ export function runAnomalyDetection(): void {
       )
   `).all() as Array<{ spot_id: number }>
 
+  const sensorFaultSpotIds = new Set(sensorFaultSpots.map(s => s.spot_id))
+
+  const pendingSensorFault = db.prepare(
+    "SELECT spot_id FROM spot_alerts WHERE alert_type = 'sensor_fault' AND status = 'pending'"
+  ).all() as Array<{ spot_id: number }>
+
+  for (const a of pendingSensorFault) {
+    if (!sensorFaultSpotIds.has(a.spot_id)) {
+      resolveAlert.run(now, a.spot_id, 'sensor_fault')
+    }
+  }
+
   for (const s of sensorFaultSpots) {
     const existing = pendingCheck.get(s.spot_id, 'sensor_fault')
-    if (!existing) {
-      insertAlert.run(s.spot_id, 'sensor_fault', now, 'pending')
-    }
+    if (existing) continue
+    const recent = recentHandledCheck.get(s.spot_id, 'sensor_fault', `-${COOLDOWN_MINUTES} minutes`)
+    if (recent) continue
+    insertAlert.run(s.spot_id, 'sensor_fault', now, 'pending')
   }
 
   const vipViolations = db.prepare(`
@@ -117,11 +151,24 @@ export function runAnomalyDetection(): void {
       AND datetime(vr.entry_time) <= datetime('now', '-30 minutes')
   `).all(now) as Array<{ spot_id: number }>
 
+  const vipViolationSpotIds = new Set(vipViolations.map(v => v.spot_id))
+
+  const pendingVipViolation = db.prepare(
+    "SELECT spot_id FROM spot_alerts WHERE alert_type = 'vip_violation' AND status = 'pending'"
+  ).all() as Array<{ spot_id: number }>
+
+  for (const a of pendingVipViolation) {
+    if (!vipViolationSpotIds.has(a.spot_id)) {
+      resolveAlert.run(now, a.spot_id, 'vip_violation')
+    }
+  }
+
   for (const v of vipViolations) {
     const existing = pendingCheck.get(v.spot_id, 'vip_violation')
-    if (!existing) {
-      insertAlert.run(v.spot_id, 'vip_violation', now, 'pending')
-    }
+    if (existing) continue
+    const recent = recentHandledCheck.get(v.spot_id, 'vip_violation', `-${COOLDOWN_MINUTES} minutes`)
+    if (recent) continue
+    insertAlert.run(v.spot_id, 'vip_violation', now, 'pending')
   }
 }
 
