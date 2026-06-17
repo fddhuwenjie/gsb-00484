@@ -3,16 +3,18 @@ import db from '../database.js'
 
 const router = Router()
 
+const ALERT_TYPE_ORDER = `
+  CASE sa.alert_type
+    WHEN 'overtime' THEN 1
+    WHEN 'vip_violation' THEN 2
+    WHEN 'sensor_fault' THEN 3
+    ELSE 4
+  END
+`
+
 router.get('/', (req: Request, res: Response): void => {
   const { status } = req.query
-  const orderBy = `ORDER BY
-    CASE sa.alert_type
-      WHEN 'overtime' THEN 1
-      WHEN 'sensor_fault' THEN 2
-      WHEN 'vip_violation' THEN 3
-      ELSE 4
-    END,
-    sa.triggered_at DESC`
+  const orderBy = `ORDER BY ${ALERT_TYPE_ORDER}, sa.triggered_at DESC`
   const alerts = status
     ? db.prepare(`
         SELECT sa.*, ps.spot_code
@@ -60,32 +62,35 @@ router.delete('/:id', (req: Request, res: Response): void => {
   res.json({ success: true, data: null })
 })
 
+function getLatestAlert(spotId: number, alertType: string): any {
+  return db.prepare(`
+    SELECT * FROM spot_alerts
+    WHERE spot_id = ? AND alert_type = ?
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(spotId, alertType)
+}
+
+function hasResolvedAfterHandled(spotId: number, alertType: string, handledId: number): boolean {
+  const result = db.prepare(`
+    SELECT COUNT(*) as count FROM spot_alerts
+    WHERE spot_id = ? AND alert_type = ? AND status = 'resolved' AND id > ?
+  `).get(spotId, alertType, handledId) as { count: number }
+  return result.count > 0
+}
+
 export function runAnomalyDetection(): void {
   const now = new Date().toISOString()
 
-  const overtimeVehicles = db.prepare(`
+  const overtimeSpotIds = (db.prepare(`
     SELECT vr.spot_id
     FROM vehicle_record vr
     WHERE vr.is_monthly = 0
       AND vr.exit_time IS NULL
       AND datetime(vr.entry_time) <= datetime('now', '-48 hours')
-  `).all() as Array<{ spot_id: number }>
+  `).all() as Array<{ spot_id: number }>).map(v => v.spot_id)
 
-  const insertAlert = db.prepare(
-    'INSERT INTO spot_alerts (spot_id, alert_type, triggered_at, status) VALUES (?, ?, ?, ?)'
-  )
-  const pendingCheck = db.prepare(
-    "SELECT id FROM spot_alerts WHERE spot_id = ? AND alert_type = ? AND status = 'pending'"
-  )
-
-  for (const v of overtimeVehicles) {
-    const existing = pendingCheck.get(v.spot_id, 'overtime')
-    if (!existing) {
-      insertAlert.run(v.spot_id, 'overtime', now, 'pending')
-    }
-  }
-
-  const sensorFaultSpots = db.prepare(`
+  const sensorFaultSpotIds = (db.prepare(`
     SELECT ps.id as spot_id
     FROM parking_spot ps
     WHERE ps.status = 'occupied'
@@ -93,16 +98,9 @@ export function runAnomalyDetection(): void {
         SELECT 1 FROM vehicle_record vr
         WHERE vr.spot_id = ps.id AND vr.exit_time IS NULL
       )
-  `).all() as Array<{ spot_id: number }>
+  `).all() as Array<{ spot_id: number }>).map(s => s.spot_id)
 
-  for (const s of sensorFaultSpots) {
-    const existing = pendingCheck.get(s.spot_id, 'sensor_fault')
-    if (!existing) {
-      insertAlert.run(s.spot_id, 'sensor_fault', now, 'pending')
-    }
-  }
-
-  const vipViolations = db.prepare(`
+  const vipViolationSpotIds = (db.prepare(`
     SELECT vr.spot_id
     FROM vehicle_record vr
     JOIN parking_spot ps ON vr.spot_id = ps.id
@@ -115,12 +113,76 @@ export function runAnomalyDetection(): void {
           AND mr.expire_date >= ?
       )
       AND datetime(vr.entry_time) <= datetime('now', '-30 minutes')
-  `).all(now) as Array<{ spot_id: number }>
+  `).all(now) as Array<{ spot_id: number }>).map(v => v.spot_id)
 
-  for (const v of vipViolations) {
-    const existing = pendingCheck.get(v.spot_id, 'vip_violation')
-    if (!existing) {
-      insertAlert.run(v.spot_id, 'vip_violation', now, 'pending')
+  const alertConfigs: Array<{ type: string; abnormalSpotIds: number[] }> = [
+    { type: 'overtime', abnormalSpotIds: overtimeSpotIds },
+    { type: 'sensor_fault', abnormalSpotIds: sensorFaultSpotIds },
+    { type: 'vip_violation', abnormalSpotIds: vipViolationSpotIds },
+  ]
+
+  const insertAlert = db.prepare(
+    'INSERT INTO spot_alerts (spot_id, alert_type, triggered_at, status, remark) VALUES (?, ?, ?, ?, ?)'
+  )
+
+  const resolveAlert = db.prepare(
+    "UPDATE spot_alerts SET status = 'resolved', handled_at = ? WHERE id = ?"
+  )
+
+  const pendingAlertsByType = db.prepare(`
+    SELECT id, spot_id FROM spot_alerts WHERE alert_type = ? AND status = 'pending'
+  `)
+
+  for (const config of alertConfigs) {
+    const { type, abnormalSpotIds } = config
+    const abnormalSet = new Set(abnormalSpotIds)
+
+    const pendingAlerts = pendingAlertsByType.all(type) as Array<{ id: number; spot_id: number }>
+
+    for (const alert of pendingAlerts) {
+      if (!abnormalSet.has(alert.spot_id)) {
+        resolveAlert.run(now, alert.id)
+      }
+    }
+
+    const handledAlerts = db.prepare(`
+      SELECT id, spot_id FROM spot_alerts
+      WHERE alert_type = ? AND status = 'handled'
+    `).all(type) as Array<{ id: number; spot_id: number }>
+
+    for (const alert of handledAlerts) {
+      if (!abnormalSet.has(alert.spot_id)) {
+        const latest = getLatestAlert(alert.spot_id, type)
+        if (latest && latest.id === alert.id) {
+          if (!hasResolvedAfterHandled(alert.spot_id, type, alert.id)) {
+            insertAlert.run(alert.spot_id, type, now, 'resolved', '异常自动恢复')
+          }
+        }
+      }
+    }
+
+    for (const spotId of abnormalSpotIds) {
+      const latest = getLatestAlert(spotId, type)
+
+      if (!latest) {
+        insertAlert.run(spotId, type, now, 'pending', null)
+        continue
+      }
+
+      if (latest.status === 'pending') {
+        continue
+      }
+
+      if (latest.status === 'resolved') {
+        insertAlert.run(spotId, type, now, 'pending', null)
+        continue
+      }
+
+      if (latest.status === 'handled') {
+        if (hasResolvedAfterHandled(spotId, type, latest.id)) {
+          insertAlert.run(spotId, type, now, 'pending', null)
+        }
+      }
     }
   }
 }
