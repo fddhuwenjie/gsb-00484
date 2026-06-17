@@ -283,6 +283,10 @@ export default function AlertCenter() {
     return new Date(b.triggered_at).getTime() - new Date(a.triggered_at).getTime()
   })
 
+  const filteredAlerts = activeTab === 'all'
+    ? sortedAlerts
+    : sortedAlerts.filter((a: any) => a.status === activeTab)
+
   const currentAlert = handleAlertId ? alerts.find((a: any) => a.id === handleAlertId) : null
 
   const handleConfirm = (remark: string) => {
@@ -340,7 +344,7 @@ export default function AlertCenter() {
           </div>
         )}
 
-        {!loading?.alerts && sortedAlerts.length === 0 && (
+        {!loading?.alerts && filteredAlerts.length === 0 && (
           <div className="bg-[#1a1d2e] border border-[#2a2d3e] rounded-lg p-12 text-center">
             <div className="w-16 h-16 rounded-full bg-[#2a2d3e]/50 flex items-center justify-center mx-auto mb-4">
               <AlertTriangle size={32} className="text-slate-600" />
@@ -352,7 +356,7 @@ export default function AlertCenter() {
           </div>
         )}
 
-        {!loading?.alerts && sortedAlerts.map((alert: any) => {
+        {!loading?.alerts && filteredAlerts.map((alert: any) => {
           const config = ALERT_TYPE_CONFIG[alert.alert_type as AlertType] || ALERT_TYPE_CONFIG.sensor_fault
           const IconComponent = config.icon
           const isHandled = alert.status === 'handled'

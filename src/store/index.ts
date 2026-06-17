@@ -23,6 +23,7 @@ interface AppState {
   selectedSpot: any | null
   visitors: any[]
   alerts: any[]
+  alertsFilter: Record<string, any> | undefined
   pendingAlertsCount: number
   dailyReport: any
   plateRecords: any[]
@@ -117,6 +118,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedSpot: null,
   visitors: [],
   alerts: [],
+  alertsFilter: undefined,
   pendingAlertsCount: 0,
   dailyReport: null,
   plateRecords: [],
@@ -430,6 +432,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   fetchAlerts: async (params) => {
     set((s) => setLoading(s.loading, 'alerts', true))
+    set({ alertsFilter: params })
     try {
       const data = await api.alerts.list(params)
       set({ alerts: data })
@@ -445,13 +448,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   handleAlert: async (id, data) => {
     await api.alerts.handle(id, data)
-    await get().fetchAlerts()
+    await get().fetchAlerts(get().alertsFilter)
     await get().fetchPendingAlertsCount()
   },
 
   deleteAlert: async (id) => {
     await api.alerts.remove(id)
-    await get().fetchAlerts()
+    await get().fetchAlerts(get().alertsFilter)
     await get().fetchPendingAlertsCount()
   },
 
